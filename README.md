@@ -51,7 +51,7 @@ scoop install extras/bin
 
 | Command                     | Description                                | Example                          |
 | --------------------------- | ------------------------------------------ | -------------------------------- |
-| `bin install <repo> [path]` | Install binary from GitHub or Docker       | `bin install github.com/cli/cli` |
+| `bin install <repo> [path]` | Install binary from a release, Docker or a local file | `bin install github.com/cli/cli` |
 | `bin list`                  | List installed binaries and versions       | `bin list`                       |
 | `bin update [binary...]`    | Update binaries (all or specified)         | `bin update`                     |
 | `bin remove <binary...>`    | Remove one or more binaries                | `bin remove gh kubectl`          |
@@ -261,6 +261,20 @@ bin install goinstall://github.com/googleapis/api-linter/v2/cmd/api-linter
 
 Version resolution goes through the `go` toolchain, so `GOPROXY`, `GOPRIVATE`
 and `GOFLAGS` are honoured.
+
+### Local Files
+
+#### Usage
+
+`bin` installs binaries and release archives from the local filesystem, e.g. tools you build yourself or releases downloaded by hand. Give it a path (absolute, relative or starting with `~`) or a `file://` URL; it's stored as an absolute `file://` URL, so `update` and `ensure` work from any directory.
+
+```shell
+bin install ./dist/mytool
+bin install ~/Downloads/tool-v1.4.2-linux-amd64.tar.gz
+bin install file:///opt/releases/tool.tar.gz
+```
+
+The file is copied (or unpacked), so the installed binary keeps working if the file is moved or deleted. The version is taken from the file name (`v1.4.2` above) or, if there's none, is a hash of the file's content, so `bin update` picks up a rebuilt file at the same path. If the file doesn't exist, e.g. with a config synced from another machine, `update` and `ensure` warn and skip that binary.
 
 ## 🔧 Configuration
 

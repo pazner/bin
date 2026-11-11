@@ -64,6 +64,9 @@ func newInstallCmd() *installCmd {
 				return err
 			}
 			log.Debugf("Using provider '%s' for '%s'", p.GetID(), u)
+			if c, ok := p.(providers.URLCanonicalizer); ok {
+				u = c.CanonicalURL()
+			}
 
 			// The archive is always kept since the mode can depend on an
 			// existing install at the final path, only known after the

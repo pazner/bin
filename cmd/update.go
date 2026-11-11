@@ -1,6 +1,7 @@
 package cmd
 
 import (
+	"errors"
 	"fmt"
 	"os"
 
@@ -76,6 +77,7 @@ func newUpdateCmd() *updateCmd {
 			}
 
 			updateFailures := map[*config.Binary]error{}
+			skipped := 0
 
 			for p, b := range binsToProcess {
 				if excluded[p] {
@@ -96,6 +98,11 @@ func newUpdateCmd() *updateCmd {
 				}
 
 				if ui, err := getLatestVersion(b, p); err != nil {
+					if errors.Is(err, providers.ErrSourceMissing) {
+						log.Warnf("%v, skipping", err)
+						skipped++
+						continue
+					}
 					if root.opts.continueOnError {
 						updateFailures[b] = fmt.Errorf("Error while getting latest version of %v: %v", b.Path, err)
 						continue
@@ -107,7 +114,11 @@ func newUpdateCmd() *updateCmd {
 			}
 
 			if len(toUpdate) == 0 && len(updateFailures) == 0 {
-				log.Infof("All binaries are up to date")
+				if skipped > 0 {
+					log.Infof("All other binaries are up to date")
+				} else {
+					log.Infof("All binaries are up to date")
+				}
 				return nil
 			}
 

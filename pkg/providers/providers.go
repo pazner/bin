@@ -83,6 +83,9 @@ func New(u, provider string) (Provider, error) {
 	if goinstallUrlPrefix.MatchString(u) || provider == "goinstall" {
 		return newGoInstall(u)
 	}
+	if provider == "local" || isLocalPath(u) {
+		return newLocal(u)
+	}
 	if !httpUrlPrefix.MatchString(u) {
 		u = fmt.Sprintf("https://%s", u)
 	}
@@ -113,6 +116,12 @@ func New(u, provider string) (Provider, error) {
 	}
 
 	return nil, fmt.Errorf("Can't find provider for url %s", u)
+}
+
+// URLCanonicalizer is implemented by providers whose URL is stored in the
+// config in a normalized form, e.g. a relative path as an absolute URL.
+type URLCanonicalizer interface {
+	CanonicalURL() string
 }
 
 // BinaryPathSetter is implemented by providers that need the path of the

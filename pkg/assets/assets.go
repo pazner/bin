@@ -468,6 +468,14 @@ func (f *Filter) ProcessURL(gf *FilteredAsset) (*finalFile, error) {
 	return f.processReader(buf)
 }
 
+// ProcessFile processes a file that's already at hand, like ProcessURL does
+// for a download: archives are unpacked and the binary selected from them.
+// name is the file's name, used to name a decompressed binary.
+func (f *Filter) ProcessFile(name string, r io.Reader) (*finalFile, error) {
+	f.name = name
+	return f.processReader(r)
+}
+
 func (f *Filter) processReader(r io.Reader) (*finalFile, error) {
 	var buf bytes.Buffer
 	tee := io.TeeReader(r, &buf)

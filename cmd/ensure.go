@@ -2,6 +2,7 @@ package cmd
 
 import (
 	"crypto/sha256"
+	"errors"
 	"fmt"
 	"io"
 	"os"
@@ -86,7 +87,10 @@ func newEnsureCmd() *ensureCmd {
 					AutoSelectPrevious: true,
 					Full:               binCfg.IsFull(),
 				})
-				if err != nil {
+				if errors.Is(err, providers.ErrSourceMissing) {
+					log.Warnf("%v, skipping %s", err, ep)
+					continue
+				} else if err != nil {
 					return err
 				}
 
