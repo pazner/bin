@@ -138,7 +138,10 @@ func newUpdateCmd() *updateCmd {
 				}
 				log.Debugf("Using provider '%s' for '%s'", p.GetID(), ui.url)
 
-				pResult, err := p.Fetch(&providers.FetchOpts{All: root.opts.all, PackagePath: b.PackagePath, SkipPatchCheck: root.opts.skipPathCheck, PackageName: b.RemoteName, PreviousAsset: b.SelectedAsset, PreviousVersion: b.Version, AutoSelectPrevious: !root.opts.all})
+				// Updates keep the install mode.
+				full := b.IsFull()
+
+				pResult, err := p.Fetch(&providers.FetchOpts{All: root.opts.all, PackagePath: b.PackagePath, SkipPatchCheck: root.opts.skipPathCheck, PackageName: b.RemoteName, PreviousAsset: b.SelectedAsset, PreviousVersion: b.Version, AutoSelectPrevious: !root.opts.all, Full: full})
 				if err != nil {
 					if root.opts.continueOnError {
 						updateFailures[b] = fmt.Errorf("Error while fetching %v: %w", ui.url, err)
@@ -147,21 +150,21 @@ func newUpdateCmd() *updateCmd {
 					return err
 				}
 
-				hash, err := saveToDisk(pResult, b.Path, true)
+				res, err := installBinary(pResult, b.Path, true, full, b)
 				if err != nil {
 					return fmt.Errorf("error installing binary: %w", err)
 				}
 
-				err = config.UpsertBinary(&config.Binary{
+				err = config.UpsertBinary(res.apply(&config.Binary{
 					RemoteName:    pResult.Name,
 					Path:          b.Path,
 					Version:       pResult.Version,
-					Hash:          fmt.Sprintf("%x", hash),
 					URL:           ui.url,
 					Provider:      p.GetID(),
 					PackagePath:   pResult.PackagePath,
 					SelectedAsset: pResult.SelectedAsset,
-				})
+					Pinned:        b.Pinned,
+				}))
 				if err != nil {
 					return err
 				}

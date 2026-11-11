@@ -25,6 +25,7 @@ type installOpts struct {
 	provider string
 	all      bool
 	name     string
+	full     bool
 }
 
 func newInstallCmd() *installCmd {
@@ -39,7 +40,10 @@ func newInstallCmd() *installCmd {
 		Args:          cobra.MinimumNArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			u := args[0]
-			defaultPath := config.Get().DefaultPath
+			defaultPath := config.Get().BinDir()
+			if err := os.MkdirAll(defaultPath, 0o755); err != nil {
+				return fmt.Errorf("error creating bin directory: %w", err)
+			}
 
 			var resolvedPath string
 			if len(args) > 1 {
@@ -61,7 +65,11 @@ func newInstallCmd() *installCmd {
 			}
 			log.Debugf("Using provider '%s' for '%s'", p.GetID(), u)
 
-			pResult, err := p.Fetch(&providers.FetchOpts{All: root.opts.all, NamePattern: root.opts.name})
+			// The archive is always kept since the mode can depend on an
+			// existing install at the final path, only known after the
+			// fetch. It's cheap: entries share memory with the data read
+			// to pick the binary.
+			pResult, err := p.Fetch(&providers.FetchOpts{All: root.opts.all, NamePattern: root.opts.name, Full: true})
 			if err != nil {
 				return err
 			}
@@ -71,27 +79,39 @@ func newInstallCmd() *installCmd {
 				return err
 			}
 
-			hash, err := saveToDisk(pResult, resolvedPath, root.opts.force)
-			if err != nil {
-				return fmt.Errorf("error installing binary: %w", err)
-			}
-
 			// Convert to absolute path before storing in config
 			absPath, err := filepath.Abs(resolvedPath)
 			if err != nil {
 				return fmt.Errorf("error converting to absolute path: %w", err)
 			}
 
-			err = config.UpsertBinary(&config.Binary{
+			// The mode comes from the flag, then from an existing install
+			// at the same path, then from the config default.
+			prev := config.Get().Bins[absPath]
+			full := config.Get().FullByDefault()
+			if prev != nil && prev.Mode != "" {
+				full = prev.IsFull()
+			}
+			if cmd.Flags().Changed("full") {
+				full = root.opts.full
+			}
+
+			res, err := installBinary(pResult, resolvedPath, root.opts.force, full, prev)
+			if err != nil {
+				return fmt.Errorf("error installing binary: %w", err)
+			}
+
+			err = config.UpsertBinary(res.apply(&config.Binary{
 				RemoteName:    pResult.Name,
 				Path:          absPath,
 				Version:       pResult.Version,
-				Hash:          fmt.Sprintf("%x", hash),
 				URL:           u,
 				Provider:      p.GetID(),
 				PackagePath:   pResult.PackagePath,
 				SelectedAsset: pResult.SelectedAsset,
-			})
+				// Reinstalling keeps the binary pinned.
+				Pinned: prev != nil && prev.Pinned,
+			}))
 			if err != nil {
 				return err
 			}
@@ -107,6 +127,7 @@ func newInstallCmd() *installCmd {
 	root.cmd.Flags().BoolVarP(&root.opts.all, "all", "a", false, "Show all possible download options (skip scoring & filtering)")
 	root.cmd.Flags().StringVarP(&root.opts.provider, "provider", "p", "", "Forces to use a specific provider")
 	root.cmd.Flags().StringVarP(&root.opts.name, "name", "n", "", "Glob pattern to select a specific asset (use asset/file for archive contents)")
+	root.cmd.Flags().BoolVarP(&root.opts.full, "full", "F", false, "Install the whole release archive (support files, man pages and shell completions), not only the binary. On by default, unless the config's default_mode is \"binary\"; use --full=false to install only the binary")
 	return root
 }
 

@@ -84,27 +84,27 @@ func newEnsureCmd() *ensureCmd {
 					PreviousAsset:      binCfg.SelectedAsset,
 					PreviousVersion:    binCfg.Version,
 					AutoSelectPrevious: true,
+					Full:               binCfg.IsFull(),
 				})
 				if err != nil {
 					return err
 				}
 
-				hash, err := saveToDisk(pResult, ep, true)
+				res, err := installBinary(pResult, ep, true, binCfg.IsFull(), binCfg)
 				if err != nil {
 					return fmt.Errorf("error installing binary: %w", err)
 				}
 
-				err = config.UpsertBinary(&config.Binary{
+				err = config.UpsertBinary(res.apply(&config.Binary{
 					RemoteName:    pResult.Name,
 					Path:          binCfg.Path,
 					Version:       pResult.Version,
-					Hash:          fmt.Sprintf("%x", hash),
 					URL:           binCfg.URL,
 					Provider:      p.GetID(),
 					PackagePath:   pResult.PackagePath,
 					SelectedAsset: pResult.SelectedAsset,
 					Pinned:        binCfg.Pinned,
-				})
+				}))
 				if err != nil {
 					return err
 				}

@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"os"
 	"strings"
 	"testing"
 )
@@ -594,3 +595,81 @@ var (
 	resticBz2 = []byte{66, 90, 104, 57, 49, 65, 89, 38, 83, 89, 24, 11, 14, 155, 0, 0, 4, 17, 128, 64, 0, 58, 33, 28, 32, 32, 0, 49, 0, 211, 77, 4, 13, 13, 52, 12, 156, 40, 142, 213, 199, 197, 220, 145, 78, 20, 36, 6, 2, 195, 166, 192}
 	resticXz  = []byte{253, 55, 122, 88, 90, 0, 0, 4, 230, 214, 180, 70, 2, 0, 33, 1, 22, 0, 0, 0, 116, 47, 229, 163, 1, 0, 12, 114, 101, 115, 116, 105, 99, 32, 98, 105, 110, 97, 114, 121, 0, 0, 0, 0, 66, 239, 118, 192, 237, 71, 78, 43, 0, 1, 37, 13, 113, 25, 196, 182, 31, 182, 243, 125, 1, 0, 0, 0, 0, 4, 89, 90}
 )
+
+// TestProcessTarKeepArchive verifies that the whole archive is kept,
+// including entries outside the stored package path, symlinks and hard links.
+func TestProcessTarKeepArchive(t *testing.T) {
+	resolver = testLinuxAMDResolver
+
+	var buf bytes.Buffer
+	tw := tar.NewWriter(&buf)
+	add := func(h *tar.Header, content string) {
+		h.Size = int64(len(content))
+		if err := tw.WriteHeader(h); err != nil {
+			t.Fatal(err)
+		}
+		_, _ = tw.Write([]byte(content))
+	}
+	add(&tar.Header{Name: "tool-v2/", Typeflag: tar.TypeDir, Mode: 0o755}, "")
+	add(&tar.Header{Name: "tool-v2/tool", Typeflag: tar.TypeReg, Mode: 0o755}, "tool binary")
+	add(&tar.Header{Name: "tool-v2/share/tool.1", Typeflag: tar.TypeReg, Mode: 0o644}, ".TH TOOL 1")
+	add(&tar.Header{Name: "tool-v2/lib/libtool.so.1", Typeflag: tar.TypeSymlink, Linkname: "libtool.so.1.0"}, "")
+	add(&tar.Header{Name: "tool-v2/tool-alias", Typeflag: tar.TypeLink, Linkname: "tool-v2/tool"}, "")
+	_ = tw.Close()
+
+	f := NewFilter(&FilterOpts{KeepArchive: true, PackagePath: "tool-v1/tool", PreferredVersion: "v1", CurrentVersion: "v2"})
+	result, err := f.processReader(bytes.NewReader(buf.Bytes()))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.PackagePath != "tool-v2/tool" {
+		t.Errorf("got package path %q, want %q", result.PackagePath, "tool-v2/tool")
+	}
+
+	got := map[string]ArchiveEntry{}
+	for _, e := range result.Archive {
+		got[e.Name] = e
+	}
+	if len(got) != 4 {
+		t.Fatalf("got %d archive entries, want 4: %v", len(got), got)
+	}
+	if e := got["tool-v2/share/tool.1"]; string(e.Data) != ".TH TOOL 1" || e.Mode != 0o644 {
+		t.Errorf("unexpected man page entry %+v", e)
+	}
+	if e := got["tool-v2/lib/libtool.so.1"]; e.Linkname != "libtool.so.1.0" {
+		t.Errorf("unexpected symlink entry %+v", e)
+	}
+	if e := got["tool-v2/tool-alias"]; string(e.Data) != "tool binary" || e.Mode != 0o755 || e.Linkname != "" {
+		t.Errorf("hard link not resolved to a copy: %+v", e)
+	}
+}
+
+func TestProcessZipKeepArchive(t *testing.T) {
+	resolver = testLinuxAMDResolver
+
+	var buf bytes.Buffer
+	zw := zip.NewWriter(&buf)
+	for name, mode := range map[string]os.FileMode{"tool/tool": 0o755, "tool/completions/tool.bash": 0o644} {
+		fh := &zip.FileHeader{Name: name, Method: zip.Store}
+		fh.SetMode(mode)
+		w, _ := zw.CreateHeader(fh)
+		_, _ = w.Write([]byte(name))
+	}
+	_ = zw.Close()
+	data := buf.Bytes()
+
+	for _, keep := range []bool{false, true} {
+		f := NewFilter(&FilterOpts{KeepArchive: keep, NamePattern: "asset/tool"})
+		f.namePatternUsed = true // simulate top-level asset already selected
+		result, err := f.processReader(bytes.NewReader(data))
+		if err != nil {
+			t.Fatal(err)
+		}
+		if result.Name != "tool" {
+			t.Errorf("keep=%v: got name %q, want tool", keep, result.Name)
+		}
+		if want := map[bool]int{false: 0, true: 2}[keep]; len(result.Archive) != want {
+			t.Errorf("keep=%v: got %d archive entries, want %d", keep, len(result.Archive), want)
+		}
+	}
+}

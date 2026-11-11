@@ -8,6 +8,8 @@ import (
 	"net/url"
 	"regexp"
 	"strings"
+
+	"github.com/marcosnils/bin/pkg/assets"
 )
 
 var ErrInvalidProvider = errors.New("invalid provider")
@@ -21,6 +23,10 @@ type File struct {
 	// SelectedAsset is the top-level release asset name that was chosen,
 	// stored so the same artefact can be defaulted on the next upgrade
 	SelectedAsset string
+	// Archive holds every entry of the release archive the binary came
+	// from. It's only populated when FetchOpts.Full is set and the release
+	// asset is an archive.
+	Archive []assets.ArchiveEntry
 }
 
 func (f *File) Hash() ([]byte, error) {
@@ -47,6 +53,9 @@ type FetchOpts struct {
 	// prompting when exactly one candidate matches. Used by `ensure`, which
 	// re-installs an already-chosen artefact at a known version.
 	AutoSelectPrevious bool
+	// Full keeps the whole release archive (see File.Archive) so the
+	// package's support files can be installed alongside the binary.
+	Full bool
 }
 
 type Provider interface {

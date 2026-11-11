@@ -81,6 +81,8 @@ func newListCmd() *listCmd {
 				status := color.GreenString("OK")
 				if err != nil {
 					status = color.RedString("missing %s", p)
+				} else if b.IsFull() {
+					status += " (full package)"
 				}
 
 				marker := " "

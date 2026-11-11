@@ -52,7 +52,7 @@ func (c *codeberg) Fetch(opts *FetchOpts) (*File, error) {
 	for _, a := range release.Attachments {
 		candidates = append(candidates, &assets.Asset{Name: a.Name, URL: a.DownloadURL})
 	}
-	f := assets.NewFilter(&assets.FilterOpts{SkipScoring: opts.All, PackagePath: opts.PackagePath, SkipPathCheck: opts.SkipPatchCheck, PackageName: opts.PackageName, NamePattern: opts.NamePattern, PreferredAsset: opts.PreviousAsset, PreferredVersion: opts.PreviousVersion, CurrentVersion: version, AutoSelectPreferred: opts.AutoSelectPrevious})
+	f := assets.NewFilter(&assets.FilterOpts{SkipScoring: opts.All, PackagePath: opts.PackagePath, SkipPathCheck: opts.SkipPatchCheck, PackageName: opts.PackageName, NamePattern: opts.NamePattern, PreferredAsset: opts.PreviousAsset, PreferredVersion: opts.PreviousVersion, CurrentVersion: version, AutoSelectPreferred: opts.AutoSelectPrevious, KeepArchive: opts.Full})
 
 	gf, err := f.FilterAssets(c.repo, candidates)
 	if err != nil {
@@ -72,7 +72,7 @@ func (c *codeberg) Fetch(opts *FetchOpts) (*File, error) {
 	// TODO calculate file hash. Not sure if we can / should do it here
 	// since we don't want to read the file unnecesarily. Additionally, sometimes
 	// releases have .sha256 files, so it'd be nice to check for those also
-	file := &File{Data: outFile.Source, Name: outFile.Name, Version: version, PackagePath: outFile.PackagePath, SelectedAsset: gf.Name}
+	file := &File{Data: outFile.Source, Name: outFile.Name, Version: version, PackagePath: outFile.PackagePath, SelectedAsset: gf.Name, Archive: outFile.Archive}
 
 	return file, nil
 }

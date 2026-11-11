@@ -42,8 +42,9 @@ func newRemoveCmd() *removeCmd {
 					return err
 				}
 				ebp := os.ExpandEnv(bp)
-				if _, ok := bins[ebp]; ok {
+				if b, ok := bins[ebp]; ok {
 					existingToRemove = append(existingToRemove, ebp)
+					removePackage(b, false)
 
 					// TODO some providers (like docker) might download
 					// additional things somewhere else, maybe we should

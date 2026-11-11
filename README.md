@@ -59,9 +59,36 @@ scoop install extras/bin
 | `bin pin <binary...>`       | Pin current version (prevent updates)      | `bin pin terraform`              |
 | `bin unpin <binary...>`     | Unpin binaries (allow updates)             | `bin unpin terraform`            |
 | `bin prune`                 | Remove missing binaries from database      | `bin prune`                      |
+| `bin convert <--full\|--binary> [binary...]` | Switch binaries between binary-only and full package installs | `bin convert --full gh` |
+| `bin config`                | Show settings and the config file path     | `bin config`                     |
 | `bin help`                  | Show help for any command                  | `bin help install`               |
 
 **Tips**: if `bin` is unable to found the right package, try `bin install -a` to show all possible download options (skip scoring & filtering).
+
+### Installing support files
+
+By default `bin` installs the whole release archive, not only the binary, so tools that need their bundled libraries or data files work, and their man pages and shell completions get installed. Use `bin install --full=false <repo>` to install only the binary.
+
+Package files go into the `share` directory next to the bin directory, so binaries in the default tree's `bin` directory get theirs in the tree's `share` directory (see [Install tree](#install-tree)), `~/.local/bin` uses `~/.local/share` and `/usr/local/bin` uses `/usr/local/share`. That's where `man` and the shells look for the man pages and completions of binaries in your `PATH`. Binaries in `~/bin` or in directories not named `bin` use `$XDG_DATA_HOME` (`~/.local/share` by default).
+
+- The archive is extracted to `<data dir>/bin/packages/<name>/`, and the installed binary is a symlink into it.
+- Man pages are linked into `<data dir>/man/manN/`, which `man` finds automatically for `~/.local/bin` and `/usr/local/bin`.
+- Bash and fish completions are linked into `<data dir>/bash-completion/completions/` and `<data dir>/fish/vendor_completions.d/`, where they're loaded automatically.
+- Zsh completions are linked into `<data dir>/zsh/site-functions/`, which you may have to add to your `fpath`.
+
+Existing files not created by `bin` are never overwritten. On Windows only the package and binary are installed, with the binary copied if symlinks aren't available.
+
+Each binary records its install mode, `binary` or `full`, and `update`, `ensure` and reinstalls with `install --force` keep it (reinstalls also keep a binary pinned). `remove` deletes the package along with its links, and `prune` also removes package files no binary accounts for, such as those left behind by an older `bin` version.
+
+To switch already installed binaries between modes at their installed version, use `bin convert`:
+
+```sh
+bin convert --full gh kubectl      # re-downloads and installs the full packages
+bin convert --binary gh            # keeps only the binary, no download
+bin convert --full --dry-run       # shows what converting all binaries would do
+```
+
+Binaries installed before modes were recorded are binary-only; use `bin convert --full` to switch them. Setting `"default_mode": "binary"` in the config makes `bin install` install only the binary unless given `--full` (the default is `"full"`).
 
 ## 🎯 Supported providers
 
@@ -239,7 +266,14 @@ and `GOFLAGS` are honoured.
 
 ### Configuration file
 
-`bin` maintains a configuration file to track installed binaries.
+`bin` maintains a configuration file to track installed binaries. `bin config` shows its path, the settings and their effective values. To change a setting, edit the file.
+
+| Setting        | Description                                                                                                  |
+| -------------- | ------------------------------------------------------------------------------------------------------------ |
+| `default_tree` | The tree binaries are installed into, see [Install tree](#install-tree). May use `~` and environment variables. |
+| `default_mode` | `full` (default) or `binary`, see [Installing support files](#installing-support-files).                     |
+
+Configs written by older `bin` versions are upgraded automatically when loaded: installed binaries without a mode are recorded as binary-only, and `default_path` becomes `default_tree` (its parent). A `default_path` not named `bin` can't be expressed as a tree and is kept, still choosing where binaries go.
 
 #### Linux/MacOS
 
@@ -255,14 +289,11 @@ Path to the configuration directory respects the `XDG Base Directory specificati
 
 Same than linux but uses `%USERPROFILE%` without `XDG_CONFIG_HOME`.
 
-### Binary Storage
+### Install tree
 
-By default, `bin` stores binaries in:
+`bin` installs into a tree: binaries go into its `bin` directory and package files into its `share` directory (`$XDG_DATA_HOME` if the tree is your home directory, so `bin` never creates `~/share`). On the first run, `bin` offers the parents of the writable `bin` directories in your `PATH` (e.g. `~/.local` for `~/.local/bin`), or asks for a directory if there are none. To pick it again run `bin config --set-default-tree`, or set `default_tree` in the config, e.g. `"default_tree": "~/ws/local"` to install into `~/ws/local/bin`. Make sure the tree's `bin` directory is in your `PATH`.
 
-- **Linux/macOS**: `~/.local/bin/`
-- **Windows**: `%LOCALAPPDATA%\bin\`
-
-Ensure this directory is in your `$PATH`.
+Changing the tree doesn't move binaries already installed.
 
 ## 🤝 Contributing
 

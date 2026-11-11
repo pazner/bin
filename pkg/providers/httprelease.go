@@ -45,7 +45,7 @@ func (p *httpReleaseProvider) Fetch(opts *FetchOpts) (*File, error) {
 		return nil, err
 	}
 
-	f := assets.NewFilter(&assets.FilterOpts{SkipScoring: opts.All, PackagePath: opts.PackagePath, SkipPathCheck: opts.SkipPatchCheck, PackageName: opts.PackageName, NamePattern: opts.NamePattern, PreferredAsset: opts.PreviousAsset, PreferredVersion: opts.PreviousVersion, CurrentVersion: version, AutoSelectPreferred: opts.AutoSelectPrevious})
+	f := assets.NewFilter(&assets.FilterOpts{SkipScoring: opts.All, PackagePath: opts.PackagePath, SkipPathCheck: opts.SkipPatchCheck, PackageName: opts.PackageName, NamePattern: opts.NamePattern, PreferredAsset: opts.PreviousAsset, PreferredVersion: opts.PreviousVersion, CurrentVersion: version, AutoSelectPreferred: opts.AutoSelectPrevious, KeepArchive: opts.Full})
 
 	gf, err := f.FilterAssets(p.id, candidates)
 	if err != nil {
@@ -60,7 +60,7 @@ func (p *httpReleaseProvider) Fetch(opts *FetchOpts) (*File, error) {
 	// TODO calculate file hash. Not sure if we can / should do it here
 	// since we don't want to read the file unnecessarily. Additionally, sometimes
 	// releases have .sha256 files, so it'd be nice to check for those also
-	return &File{Data: outFile.Source, Name: outFile.Name, Version: version, PackagePath: outFile.PackagePath, SelectedAsset: gf.Name}, nil
+	return &File{Data: outFile.Source, Name: outFile.Name, Version: version, PackagePath: outFile.PackagePath, SelectedAsset: gf.Name, Archive: outFile.Archive}, nil
 }
 
 func (p *httpReleaseProvider) GetLatestVersion() (string, string, error) {

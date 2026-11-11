@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"os"
 	"path/filepath"
 	"sort"
 	"strconv"
@@ -60,6 +61,21 @@ type finalFile struct {
 	Source      io.Reader
 	Name        string
 	PackagePath string
+	// Archive holds every entry of the archive the binary was taken from.
+	// It's only populated when FilterOpts.KeepArchive is set.
+	Archive []ArchiveEntry
+}
+
+// ArchiveEntry is a single file or symlink from a release archive, kept so
+// the whole package (support files, man pages, completions) can be installed.
+type ArchiveEntry struct {
+	// Name is the slash-separated path of the entry inside the archive.
+	Name string
+	// Mode holds the permission bits of a regular file.
+	Mode os.FileMode
+	Data []byte
+	// Linkname is the target of a symlink. It's empty for regular files.
+	Linkname string
 }
 
 type platformResolver interface {
@@ -75,6 +91,7 @@ type Filter struct {
 	packagePath     string
 	namePatternUsed bool
 	preferredUsed   bool
+	archive         []ArchiveEntry
 }
 
 type FilterOpts struct {
@@ -111,6 +128,10 @@ type FilterOpts struct {
 	// prompting when exactly one candidate matches. Used by `ensure`, which
 	// re-installs an already-chosen artefact at a known version.
 	AutoSelectPreferred bool
+
+	// KeepArchive keeps every entry of the archive the binary is extracted
+	// from so the caller can install the full package and not only the binary.
+	KeepArchive bool
 }
 
 type runtimeResolver struct{}
@@ -462,7 +483,7 @@ func (f *Filter) processReader(r io.Reader) (*finalFile, error) {
 	// (java -jar) so it must be kept intact rather than unpacked.
 	if t == matchers.TypeZip && isJar(f.name) {
 		log.Debugf("Treating %s as a jar file, skipping extraction", f.name)
-		return &finalFile{Source: outputFile, Name: f.name, PackagePath: f.packagePath}, nil
+		return &finalFile{Source: outputFile, Name: f.name, PackagePath: f.packagePath, Archive: f.archive}, nil
 	}
 
 	type processorFunc func(repoName string, r io.Reader) (*finalFile, error)
@@ -496,7 +517,7 @@ func (f *Filter) processReader(r io.Reader) (*finalFile, error) {
 		return f.processReader(outputFile)
 	}
 
-	return &finalFile{Source: outputFile, Name: f.name, PackagePath: f.packagePath}, err
+	return &finalFile{Source: outputFile, Name: f.name, PackagePath: f.packagePath, Archive: f.archive}, err
 }
 
 // packagePathMatches reports whether an archive entry matches the package
@@ -542,6 +563,7 @@ func (f *Filter) processTar(name string, r io.Reader) (*finalFile, error) {
 		log.Debugf("Processing tag with PackagePath %s\n", f.opts.PackagePath)
 	}
 	execFiles := map[string][]byte{}
+	var archive []ArchiveEntry
 	for {
 		header, err := tr.Next()
 		if err == io.EOF {
@@ -552,19 +574,28 @@ func (f *Filter) processTar(name string, r io.Reader) (*finalFile, error) {
 			continue
 		}
 
+		// TODO we're basically reading all the files
+		// isn't there a way just to store the reference
+		// where this data is so we don't have to do this or
+		// re-scan the archive twice afterwards?
+		var bs []byte
+		if header.Typeflag == tar.TypeReg {
+			if bs, err = io.ReadAll(tr); err != nil {
+				return nil, err
+			}
+		}
+
+		// The whole archive is kept regardless of the package path, which
+		// only narrows down the binary candidates.
+		if f.opts.KeepArchive {
+			archive = appendTarEntry(archive, header, bs)
+		}
+
 		if !f.opts.SkipPathCheck && len(f.opts.PackagePath) > 0 && !f.packagePathMatches(header.Name) {
 			continue
 		}
 
 		if header.Typeflag == tar.TypeReg {
-			// TODO we're basically reading all the files
-			// isn't there a way just to store the reference
-			// where this data is so we don't have to do this or
-			// re-scan the archive twice afterwards?
-			bs, err := io.ReadAll(tr)
-			if err != nil {
-				return nil, err
-			}
 			tarFiles[header.Name] = bs
 			if header.FileInfo().Mode()&0o111 != 0 {
 				execFiles[header.Name] = bs
@@ -597,8 +628,33 @@ func (f *Filter) processTar(name string, r io.Reader) (*finalFile, error) {
 	selectedFile := choice.String()
 
 	tf := tarFiles[selectedFile]
+	if f.opts.KeepArchive {
+		f.archive = archive
+	}
 
 	return &finalFile{Source: bytes.NewReader(tf), Name: filepath.Base(selectedFile), PackagePath: selectedFile}, nil
+}
+
+// appendTarEntry adds a tar entry to the kept archive. Hard links are
+// resolved to a copy of the file they point to, since that file has already
+// been read; other entry types (devices, fifos) are skipped.
+func appendTarEntry(archive []ArchiveEntry, h *tar.Header, data []byte) []ArchiveEntry {
+	switch h.Typeflag {
+	case tar.TypeReg:
+		return append(archive, ArchiveEntry{Name: h.Name, Mode: h.FileInfo().Mode().Perm(), Data: data})
+	case tar.TypeSymlink:
+		return append(archive, ArchiveEntry{Name: h.Name, Linkname: h.Linkname})
+	case tar.TypeLink:
+		for _, e := range archive {
+			if e.Name == h.Linkname && e.Linkname == "" {
+				return append(archive, ArchiveEntry{Name: h.Name, Mode: e.Mode, Data: e.Data})
+			}
+		}
+		log.Debugf("Skipping hard link %s to unknown entry %s", h.Name, h.Linkname)
+	default:
+		log.Debugf("Skipping unsupported tar entry %s", h.Name)
+	}
+	return archive
 }
 
 func (f *Filter) processBz2(name string, r io.Reader) (*finalFile, error) {
@@ -621,6 +677,7 @@ func (f *Filter) processZip(name string, r io.Reader) (*finalFile, error) {
 
 	zipFiles := map[string][]byte{}
 	zipExecFiles := map[string][]byte{}
+	var archive []ArchiveEntry
 	if len(f.opts.PackagePath) > 0 {
 		log.Debugf("Processing tag with PackagePath %s\n", f.opts.PackagePath)
 	}
@@ -634,10 +691,6 @@ func (f *Filter) processZip(name string, r io.Reader) (*finalFile, error) {
 			continue
 		}
 
-		if !f.opts.SkipPathCheck && len(f.opts.PackagePath) > 0 && !f.packagePathMatches(header.Name) {
-			continue
-		}
-
 		// TODO we're basically reading all the files
 		// isn't there a way just to store the reference
 		// where this data is so we don't have to do this or
@@ -645,6 +698,19 @@ func (f *Filter) processZip(name string, r io.Reader) (*finalFile, error) {
 		bs, err := io.ReadAll(zr)
 		if err != nil {
 			return nil, err
+		}
+
+		if f.opts.KeepArchive {
+			if header.Mode()&os.ModeSymlink != 0 {
+				// zip stores the symlink target as the entry's content
+				archive = append(archive, ArchiveEntry{Name: header.Name, Linkname: string(bs)})
+			} else {
+				archive = append(archive, ArchiveEntry{Name: header.Name, Mode: header.Mode().Perm(), Data: bs})
+			}
+		}
+
+		if !f.opts.SkipPathCheck && len(f.opts.PackagePath) > 0 && !f.packagePathMatches(header.Name) {
+			continue
 		}
 
 		zipFiles[header.Name] = bs
@@ -678,6 +744,9 @@ func (f *Filter) processZip(name string, r io.Reader) (*finalFile, error) {
 	selectedFile := choice.String()
 
 	fr := bytes.NewReader(zipFiles[selectedFile])
+	if f.opts.KeepArchive {
+		f.archive = archive
+	}
 
 	// return base of selected file since tar
 	// files usually have folders inside
