@@ -304,7 +304,7 @@ func TestDefaultIndex(t *testing.T) {
 	}
 
 	// Preferred musl variant from a previous version resolves to index 1.
-	want := SanitizeName("tool-1.0.0-linux-amd64-musl.tar.gz", "1.0.0")
+	want := stripVersion("tool-1.0.0-linux-amd64-musl.tar.gz", "1.0.0")
 	if got := defaultIndex(opts, want, "2.0.0"); got != 1 {
 		t.Errorf("defaultIndex match: got %d, want 1", got)
 	}
@@ -315,7 +315,7 @@ func TestDefaultIndex(t *testing.T) {
 	}
 
 	// A preference that no longer exists yields no default.
-	gone := SanitizeName("tool-1.0.0-linux-amd64-static.tar.gz", "1.0.0")
+	gone := stripVersion("tool-1.0.0-linux-amd64-static.tar.gz", "1.0.0")
 	if got := defaultIndex(opts, gone, "2.0.0"); got != -1 {
 		t.Errorf("defaultIndex missing: got %d, want -1", got)
 	}
@@ -670,6 +670,61 @@ func TestProcessZipKeepArchive(t *testing.T) {
 		}
 		if want := map[bool]int{false: 0, true: 2}[keep]; len(result.Archive) != want {
 			t.Errorf("keep=%v: got %d archive entries, want %d", keep, len(result.Archive), want)
+		}
+	}
+}
+
+// TestFilterAssetsPreferredSourceArchive is a regression test: gdu publishes
+// its source as gdu-5.39.0.tgz next to gdu_linux_amd64.tgz. Both used to
+// normalize to gdu.tgz, so the source archive could be picked as the
+// previously selected artefact.
+func TestFilterAssetsPreferredSourceArchive(t *testing.T) {
+	resolver = testLinuxAMDResolver
+
+	names := []string{"gdu-5.39.0.tgz", "gdu.1.tgz", "gdu_darwin_amd64.tgz", "gdu_linux_amd64.tgz", "gdu_linux_amd64_static.tgz", "gdu_linux_arm64.tgz", "sha256sums.txt"}
+	for _, prev := range []struct{ asset, version string }{
+		{"gdu_linux_amd64.tgz", "v5.39.0"},        // ensure/convert: same release
+		{"gdu_linux_amd64.tgz", "v5.38.0"},        // update
+		{"gdu_linux_amd64_static.tgz", "v5.38.0"}, // the other variant
+	} {
+		as := []*Asset{}
+		for _, n := range names {
+			as = append(as, &Asset{Name: n})
+		}
+		f := NewFilter(&FilterOpts{
+			PreferredAsset:      prev.asset,
+			PreferredVersion:    prev.version,
+			CurrentVersion:      "v5.39.0",
+			AutoSelectPreferred: true,
+		})
+		got, err := f.FilterAssets("gdu", as)
+		if err != nil {
+			t.Fatalf("%s@%s: %v", prev.asset, prev.version, err)
+		}
+		if got.Name != prev.asset {
+			t.Errorf("%s@%s: got %q", prev.asset, prev.version, got.Name)
+		}
+	}
+
+	// Without the platform asset, the source archive must not be mistaken
+	// for it.
+	f := NewFilter(&FilterOpts{PreferredAsset: "gdu_linux_amd64.tgz", PreferredVersion: "v5.39.0", CurrentVersion: "v5.39.0", AutoSelectPreferred: true})
+	got, err := f.FilterAssets("gdu", []*Asset{{Name: "gdu-5.39.0.tgz"}, {Name: "gdu_linux_amd64_static.tgz"}})
+	if err == nil && got.Name == "gdu-5.39.0.tgz" {
+		t.Error("source archive selected as the previous artefact")
+	}
+}
+
+func TestStripVersion(t *testing.T) {
+	for _, c := range []struct{ name, version, want string }{
+		{"gdu-5.39.0.tgz", "v5.39.0", "gdu.tgz"},
+		{"gdu_linux_amd64.tgz", "v5.39.0", "gdu_linux_amd64.tgz"},
+		{"tool-v1.0.0-linux-amd64/tool", "v1.0.0", "tool-linux-amd64/tool"},
+		{"Tool_1.0.0_Linux.tar.gz", "1.0.0", "tool_linux.tar.gz"},
+		{"tool_linux_amd64", "", "tool_linux_amd64"}, // no version: unchanged
+	} {
+		if got := stripVersion(c.name, c.version); got != c.want {
+			t.Errorf("stripVersion(%q, %q) = %q, want %q", c.name, c.version, got, c.want)
 		}
 	}
 }

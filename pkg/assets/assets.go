@@ -92,6 +92,8 @@ type Filter struct {
 	namePatternUsed bool
 	preferredUsed   bool
 	archive         []ArchiveEntry
+	// asset is the name of the release asset being processed, for messages.
+	asset string
 }
 
 type FilterOpts struct {
@@ -190,10 +192,10 @@ func (f *Filter) FilterAssets(repoName string, as []*Asset) (*FilteredAsset, err
 	var preferredAsset *Asset
 	if f.opts.PreferredAsset != "" && !f.preferredUsed {
 		f.preferredUsed = true
-		preferred = SanitizeName(f.opts.PreferredAsset, f.opts.PreferredVersion)
+		preferred = stripVersion(f.opts.PreferredAsset, f.opts.PreferredVersion)
 		var prefMatches []*Asset
 		for _, a := range as {
-			if SanitizeName(a.Name, f.opts.CurrentVersion) == preferred {
+			if stripVersion(a.Name, f.opts.CurrentVersion) == preferred {
 				prefMatches = append(prefMatches, a)
 			}
 		}
@@ -386,11 +388,25 @@ func defaultIndex(opts []fmt.Stringer, preferred, version string) int {
 		return -1
 	}
 	for i, o := range opts {
-		if fa, ok := o.(*FilteredAsset); ok && SanitizeName(fa.Name, version) == preferred {
+		if fa, ok := o.(*FilteredAsset); ok && stripVersion(fa.Name, version) == preferred {
 			return i
 		}
 	}
 	return -1
+}
+
+// stripVersion removes the version from an asset or archive entry name, so
+// the same artefact can be recognized across releases. Unlike SanitizeName it
+// keeps the OS and architecture: they tell apart artefacts that are otherwise
+// named alike, e.g. tool_linux_amd64.tgz and the source archive tool-1.2.0.tgz.
+func stripVersion(name, version string) string {
+	name = strings.ToLower(name)
+	if version == "" {
+		return name
+	}
+	version = strings.ToLower(version)
+	trimmed := strings.TrimPrefix(version, "v")
+	return strings.NewReplacer("_"+version, "", "_"+trimmed, "", "-"+version, "", "-"+trimmed, "").Replace(name)
 }
 
 // SanitizeName removes irrelevant information from the
@@ -434,6 +450,7 @@ func SanitizeName(name, version string) string {
 // ProcessURL processes a FilteredAsset by uncompressing/unarchiving the URL of the asset.
 func (f *Filter) ProcessURL(gf *FilteredAsset) (*finalFile, error) {
 	f.name = gf.Name
+	f.asset = gf.Name
 	// We're not closing the body here since the caller is in charge of that
 	req, err := http.NewRequest(http.MethodGet, gf.URL, nil)
 	if err != nil {
@@ -455,7 +472,7 @@ func (f *Filter) ProcessURL(gf *FilteredAsset) (*finalFile, error) {
 	// We're caching the whole file into memory so we can prompt
 	// the user which file they want to download
 
-	log.Infof("Starting download of %s", gf.URL)
+	log.Infof("Starting download of %s (%s)", gf.Name, gf.URL)
 	bar := pb.Full.Start64(res.ContentLength)
 	barReader := bar.NewProxyReader(res.Body)
 	defer bar.Finish()
@@ -473,6 +490,7 @@ func (f *Filter) ProcessURL(gf *FilteredAsset) (*finalFile, error) {
 // name is the file's name, used to name a decompressed binary.
 func (f *Filter) ProcessFile(name string, r io.Reader) (*finalFile, error) {
 	f.name = name
+	f.asset = name
 	return f.processReader(r)
 }
 
@@ -538,7 +556,7 @@ func (f *Filter) packagePathMatches(entryName string) bool {
 	if entryName == f.opts.PackagePath {
 		return true
 	}
-	return SanitizeName(entryName, f.opts.CurrentVersion) == SanitizeName(f.opts.PackagePath, f.opts.PreferredVersion)
+	return stripVersion(entryName, f.opts.CurrentVersion) == stripVersion(f.opts.PackagePath, f.opts.PreferredVersion)
 }
 
 // processGz receives a tar.gz file and returns the
@@ -617,7 +635,7 @@ func (f *Filter) processTar(name string, r io.Reader) (*finalFile, error) {
 		log.Debugf("No executable files found in tar archive, considering all files")
 	}
 	if len(tarFiles) == 0 {
-		return nil, fmt.Errorf("no files found in tar archive, use -p flag to manually select . PackagePath [%s]", f.opts.PackagePath)
+		return nil, fmt.Errorf("no files found in tar archive %s, use -p flag to manually select . PackagePath [%s]", f.asset, f.opts.PackagePath)
 	}
 
 	var err error
@@ -733,7 +751,7 @@ func (f *Filter) processZip(name string, r io.Reader) (*finalFile, error) {
 		log.Debugf("No executable files found in zip archive, considering all files")
 	}
 	if len(zipFiles) == 0 {
-		return nil, fmt.Errorf("No files found in zip archive. PackagePath [%s]", f.opts.PackagePath)
+		return nil, fmt.Errorf("No files found in zip archive %s. PackagePath [%s]", f.asset, f.opts.PackagePath)
 	}
 
 	var err error
